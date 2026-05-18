@@ -78,23 +78,29 @@ app.all("/chat", async (req, res) => {
     session.chatHistory.push({ role: "user", parts: [{ text: userMessage }] });
 
     try {
-      // De correcte opbouw van de tool-declaratie
-      const toolsConfig = [{
-        functionDeclarations: [
-          {
-            name: "getRecentActivities",
-            description: "Haalt een lijst op van de meest recente sportactiviteiten (ritten, runs, etc.) van de sporter inclusief afstanden, tijden en hartslagdata.",
-            parameters: {
-              type: "OBJECT",
-              properties: {
-                limit: { type: "INTEGER", description: "Het aantal activiteiten dat opgehaald moet worden. Standaard is 5." }
+      // De exacte, officiële opbouw van tools voor de Gemini REST API
+      const toolsConfig = [
+        {
+          functionDeclarations: [
+            {
+              name: "getRecentActivities",
+              description: "Haalt een lijst op van de meest recente sportactiviteiten van de atleet inclusief afstanden, tijden en hartslagdata.",
+              parameters: {
+                type: "OBJECT",
+                properties: {
+                  limit: { 
+                    type: "INTEGER", 
+                    description: "Het aantal activiteiten dat opgehaald moet worden (bijv. 5)." 
+                  }
+                },
+                required: []
               }
             }
-          }
-        ]
-      }];
+          ]
+        }
+      ];
 
-      // Eerste call naar Gemini (v1) met de gecorrigeerde JSON-payload
+      // Eerste aanroep naar Gemini
       let geminiCall = await axios.post(
         `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
         {
@@ -105,19 +111,18 @@ app.all("/chat", async (req, res) => {
             },
             ...session.chatHistory
           ],
-          tools: toolsConfig // Staat nu op de juiste hoofdhoogte voor de v1 API
+          tools: toolsConfig
         }
       );
 
       let candidate = geminiCall.data.candidates[0];
       
-      // Veilig controleren of Gemini een functionCall terugstuurt
       let functionCall = null;
       if (candidate.content && candidate.content.parts) {
         functionCall = candidate.content.parts.find(p => p.functionCall);
       }
 
-      // Als Gemini de tool wil gebruiken, gaan we data ophalen
+      // Als Gemini de tool aanroept
       if (functionCall && functionCall.name === "getRecentActivities") {
         const limit = functionCall.args.limit || 5;
         
@@ -128,7 +133,7 @@ app.all("/chat", async (req, res) => {
 
         const formattedData = formatActivitiesForAI(stravaRes.data);
 
-        // Tweede call naar Gemini om de data te overhandigen
+        // Tweede aanroep naar Gemini met het resultaat van de functie
         let geminiFinalCall = await axios.post(
           `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
           {
@@ -144,70 +149,21 @@ app.all("/chat", async (req, res) => {
                 parts: [{
                   functionResponse: {
                     name: "getRecentActivities",
-                    response: { data: formattedData }
+                    response: { 
+                      name: "getRecentActivities",
+                      content: { data: formattedData } 
+                    }
                   }
                 }]
               }
             ],
-            tools: toolsConfig // Ook hier verplicht meegeven
+            tools: toolsConfig
           }
         );
 
         aiResponseText = geminiFinalCall.data.candidates[0].content.parts[0].text;
       } else {
-        // Als Gemini direct antwoord geeft zonder data nodig te hebben
         aiResponseText = candidate.content.parts[0].text;
       }
 
-      session.chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
-
-    } catch (err) {
-      console.error("Gemini Error:", err.response ? JSON.stringify(err.response.data) : err.message);
-      aiResponseText = "De AI-coach kon de data momenteel niet verwerken. Er ging iets mis met het koppelen van de Strava-tools.";
-    }
-  }
-
-  let chatBubbles = session.chatHistory.map(msg => {
-    if (!msg.parts || !msg.parts[0] || !msg.parts[0].text) return ""; 
-    let roleName = msg.role === "user" ? "Jij" : "AI Coach";
-    let bgColor = msg.role === "user" ? "#e1ffc7" : "#f1f0f0";
-    let align = msg.role === "user" ? "flex-end" : "flex-start";
-    return `<div style="background: ${bgColor}; align-self: ${align}; padding: 12px 16px; border-radius: 12px; max-width: 80%; margin-bottom: 10px; line-height: 1.4; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-              <strong>${roleName}:</strong><br>${msg.parts[0].text.replace(/\n/g, "<br>")}
-            </div>`;
-  }).join("");
-
-  res.send(`
-    <style>
-      body { font-family: 'Segoe UI', Arial, sans-serif; background: #eaeaea; margin: 0; padding: 20px; display: flex; justify-content: center; }
-      .chat-container { width: 100%; max-width: 750px; background: white; height: 88vh; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); display: flex; flex-direction: column; overflow: hidden; }
-      .header { background: #fc4c02; color: white; padding: 20px; font-size: 1.3em; font-weight: bold; text-align: center; letter-spacing: 0.5px; }
-      .messages-box { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; background: #fafafa; }
-      .form-box { padding: 20px; background: white; border-top: 1px solid #ddd; display: flex; gap: 10px; }
-      .input-text { flex: 1; padding: 14px; border: 1px solid #ccc; border-radius: 8px; font-size: 1em; }
-      .input-text:focus { outline: none; border-color: #fc4c02; }
-      .btn { background: #fc4c02; color: white; border: none; padding: 0 25px; font-size: 1em; border-radius: 8px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
-      .btn:hover { background: #e24301; }
-    </style>
-
-    <div class="chat-container">
-      <div class="header">🤖 Gemini High-Performance Sport Coach</div>
-      <div class="messages-box">
-        ${chatBubbles || `<div style="color: #888; text-align: center; margin-top: 50px; font-size: 1.05em; line-height: 1.5;">Stel een vraag om de coach toegang te geven tot je Strava-data.<br><br><span style="font-size: 0.9em; background: #eee; padding: 8px 12px; border-radius: 20px; color: #555;">Probeer: "Analyseer de intensiteit van mijn laatste 3 trainingen"</span></div>`}
-      </div>
-      <form action="/chat" method="POST" class="form-box">
-        <input type="hidden" name="sessionId" value="${sessionId}">
-        <input type="text" name="message" class="input-text" placeholder="Vraag over zones, intensiteit, duur of herstel..." required autocomplete="off">
-        <button type="submit" class="btn">Verstuur</button>
-      </form>
-    </div>
-    <script>
-      const box = document.querySelector('.messages-box');
-      box.scrollTop = box.scrollHeight;
-    </script>
-  `);
-});
-
-app.listen(PORT, () => {
-  console.log("AI-Assistent server draait op poort " + PORT);
-});
+      session.chatHistory
