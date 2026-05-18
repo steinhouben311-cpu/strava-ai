@@ -74,11 +74,10 @@ app.all("/chat", async (req, res) => {
   let aiResponseText = "Stel je vraag aan de AI Coach over je trainingen, intensiteit, zones of herstel!";
 
   if (userMessage && GEMINI_API_KEY) {
-    // Sla het bericht van de gebruiker op voor de UI
     session.chatHistory.push({ role: "user", text: userMessage });
 
     try {
-      // Haal ALTIJD direct de laatste 5 activiteiten op bij Strava
+      // Haal de Strava data op
       const stravaRes = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
         headers: { Authorization: `Bearer ${session.accessToken}` },
         params: { per_page: 5 }
@@ -86,7 +85,6 @@ app.all("/chat", async (req, res) => {
 
       const formattedData = formatActivitiesForAI(stravaRes.data);
 
-      // Bouw de chatgeschiedenis op in het simpele tekstformaat dat Gemini ALTIJD begrijpt
       const apiContents = [
         {
           role: "user",
@@ -94,7 +92,6 @@ app.all("/chat", async (req, res) => {
         }
       ];
 
-      // Voeg de eerdere chatberichten netjes toe
       session.chatHistory.forEach(msg => {
         apiContents.push({
           role: msg.role === "user" ? "user" : "model",
@@ -102,19 +99,17 @@ app.all("/chat", async (req, res) => {
         });
       });
 
-      // Simpele, kale API call naar Gemini zonder 'tools' veld
+      // GEFIXT: We gebruiken nu 'gemini-1.5-flash-latest' in de URL, wat officieel ondersteund wordt op /v1/
       let geminiCall = await axios.post(
-        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
         { contents: apiContents }
       );
 
       aiResponseText = geminiCall.data.candidates[0].content.parts[0].text;
-      
-      // Sla het antwoord op voor de UI
       session.chatHistory.push({ role: "model", text: aiResponseText });
 
     } catch (err) {
-      console.error("Error:", err.response ? JSON.stringify(err.response.data) : err.message);
+      console.error("Error details:", err.response ? JSON.stringify(err.response.data) : err.message);
       aiResponseText = "De AI-coach kon je bericht of de Strava-data momenteel niet verwerken.";
     }
   }
