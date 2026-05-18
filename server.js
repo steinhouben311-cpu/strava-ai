@@ -99,9 +99,9 @@ app.all("/chat", async (req, res) => {
         });
       });
 
-      // WIJZIGING: We stappen over naar de v1 endpoint met het universeel ondersteunde gemini-pro model
+      // DE FIX: Dit is de exacte, officieel ondersteunde HTTP-route voor v1beta met gemini-1.5-flash
       let geminiCall = await axios.post(
-        `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
         { contents: apiContents }
       );
 
