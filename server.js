@@ -78,27 +78,26 @@ app.all("/chat", async (req, res) => {
     session.chatHistory.push({ role: "user", parts: [{ text: userMessage }] });
 
     try {
-      // De exacte, universele REST-specificatie voor tools
+      // Dit is de exacte structuur die de stabiele v1 API accepteert onder de 'tools' parameter
       const toolsConfig = [{
         functionDeclarations: [{
           name: "getRecentActivities",
           description: "Haalt een lijst op van de meest recente sportactiviteiten van de atleet inclusief afstanden, tijden en hartslagdata.",
           parameters: {
-            type: "object",
+            type: "OBJECT",
             properties: {
               limit: { 
-                type: "integer", 
+                type: "INTEGER", 
                 description: "Het aantal activiteiten dat opgehaald moet worden (bijv. 5)." 
               }
-            },
-            required: []
+            }
           }
         }]
       }];
 
-      // We schakelen hier over naar v1beta. v1beta accepteert function calling via kale JSON requests vlekkeloos zonder library-eisen!
+      // Eerste call naar de stabiele v1 API met de correct ingepakte tools
       let geminiCall = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
         {
           contents: [
             {
@@ -118,7 +117,7 @@ app.all("/chat", async (req, res) => {
         functionCall = candidate.content.parts.find(p => p.functionCall);
       }
 
-      // Als Gemini de tool wil gebruiken
+      // Als Gemini besluit de Strava-tool aan te roepen
       if (functionCall && functionCall.name === "getRecentActivities") {
         const limit = functionCall.args.limit || 5;
         
@@ -129,9 +128,9 @@ app.all("/chat", async (req, res) => {
 
         const formattedData = formatActivitiesForAI(stravaRes.data);
 
-        // Stuur de data netjes terug in de v1beta-structuur
+        // Tweede call naar de stabiele v1 API om het antwoord van de functie te overhandigen
         let geminiFinalCall = await axios.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+          `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
           {
             contents: [
               {
@@ -141,7 +140,7 @@ app.all("/chat", async (req, res) => {
               ...session.chatHistory,
               candidate.content, 
               {
-                role: "user",
+                role: "user", // Belangrijk: 'user' stuur de response terug
                 parts: [{
                   functionResponse: {
                     name: "getRecentActivities",
@@ -163,7 +162,7 @@ app.all("/chat", async (req, res) => {
 
     } catch (err) {
       console.error("Gemini Error:", err.response ? JSON.stringify(err.response.data) : err.message);
-      aiResponseText = "De AI-coach kon de data momenteel niet verwerken. Er ging iets mis met het koppelen van de Strava-tools.";
+      aiResponseText = "De AI-coach kon de data momenteel niet verwerken. Er ging iets mis in de communicatie met de servers.";
     }
   }
 
