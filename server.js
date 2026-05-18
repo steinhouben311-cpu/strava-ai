@@ -9,16 +9,13 @@ app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 3000;
 
-// Variabelen die we uit de Render Environment Settings halen
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI || "http://localhost:3000/callback";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-// Opslag voor actieve sessies om de chatgeschiedenis te onthouden
 const sessionStore = {};
 
-// Filter en formatteer Strava data zodat de AI het perfect begrijpt
 function formatActivitiesForAI(activities) {
   return activities.map(act => ({
     id: act.id,
@@ -40,13 +37,11 @@ app.get("/", (req, res) => {
   res.send("🚀 Strava AI Sportcoach Backend werkt! Ga naar /auth om te beginnen.");
 });
 
-// 1. Start Strava Inlogprocedure
 app.get("/auth", (req, res) => {
   const url = `https://www.strava.com/oauth/authorize?client_id=${CLIENT_ID}&response_type=code&redirect_uri=${REDIRECT_URI}&approval_prompt=force&scope=activity:read_all`;
   res.redirect(url);
 });
 
-// 2. Strava Callback + Sessie aanmaken
 app.get("/callback", async (req, res) => {
   try {
     const code = req.query.code;
@@ -68,7 +63,7 @@ app.get("/callback", async (req, res) => {
   }
 });
 
-// 3. De Interactieve Chatomgeving (Function Calling met Gemini)
+// De Chatomgeving met de stabiele Gemini 1.5 Flash API link
 app.all("/chat", async (req, res) => {
   const sessionId = req.query.sessionId || req.body.sessionId;
   const userMessage = req.body.message;
@@ -84,7 +79,6 @@ app.all("/chat", async (req, res) => {
     session.chatHistory.push({ role: "user", parts: [{ text: userMessage }] });
 
     try {
-      // Beschrijf de tool (functie) die Gemini mag aanroepen als hij data nodig heeft
       const tools = [{
         functionDeclarations: [
           {
@@ -100,9 +94,9 @@ app.all("/chat", async (req, res) => {
         ]
       }];
 
-      // Eerste call naar Gemini met de complete context en de tools
+      // GEBRUIKT NU DE STABIELE v1 PRODUCTIE URL VAN GOOGLE
       let geminiCall = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
         {
           contents: [
             {
@@ -118,7 +112,6 @@ app.all("/chat", async (req, res) => {
       let candidate = geminiCall.data.candidates[0];
       let functionCall = candidate.content.parts.find(p => p.functionCall);
 
-      // Als Gemini besluit de tool te gebruiken, gaan we de Strava API in
       if (functionCall && functionCall.name === "getRecentActivities") {
         const limit = functionCall.args.limit || 5;
         
@@ -129,9 +122,9 @@ app.all("/chat", async (req, res) => {
 
         const formattedData = formatActivitiesForAI(stravaRes.data);
 
-        // Stuur de data terug naar Gemini voor de definitieve analyse
+        // GEBRUIKT NU DE STABIELE v1 PRODUCTIE URL VAN GOOGLE
         let geminiFinalCall = await axios.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+          `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
           {
             contents: [
               {
@@ -161,13 +154,13 @@ app.all("/chat", async (req, res) => {
       session.chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
 
     } catch (err) {
-      console.error("Gemini Error:", err.response ? err.response.data : err.message);
-      aiResponseText = "Er ging een energiesensor af in de cloud. De AI kon je data momenteel niet verwerken.";
+      console.error("Gemini Error:", err.response ? JSON.stringify(err.response.data) : err.message);
+      aiResponseText = "De AI-coach kon de data momenteel niet verwerken. Controleer of de API-sleutel geldig is.";
     }
   }
 
-  // Bouw de chatbubbels
   let chatBubbles = session.chatHistory.map(msg => {
+    if (!msg.parts || !msg.parts[0] || !msg.parts[0].text) return ""; // Sla function calls over in de UI
     let roleName = msg.role === "user" ? "Jij" : "AI Coach";
     let bgColor = msg.role === "user" ? "#e1ffc7" : "#f1f0f0";
     let align = msg.role === "user" ? "flex-end" : "flex-start";
