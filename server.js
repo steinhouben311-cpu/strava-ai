@@ -99,7 +99,7 @@ app.all("/chat", async (req, res) => {
         });
       });
 
-      // WIJZIGING: We gebruiken nu v1beta met de universele aanduiding 'gemini-1.5-flash'
+      // DE FIX: De waterdichte URL-structuur voor v1beta met de basismodelnaam
       let geminiCall = await axios.post(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
         { contents: apiContents }
