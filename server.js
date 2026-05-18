@@ -63,7 +63,6 @@ app.get("/callback", async (req, res) => {
   }
 });
 
-// De Chatomgeving met de stabiele Gemini 1.5 Flash API link
 app.all("/chat", async (req, res) => {
   const sessionId = req.query.sessionId || req.body.sessionId;
   const userMessage = req.body.message;
@@ -79,7 +78,8 @@ app.all("/chat", async (req, res) => {
     session.chatHistory.push({ role: "user", parts: [{ text: userMessage }] });
 
     try {
-      const tools = [{
+      // De correcte opbouw van de tool-declaratie
+      const toolsConfig = [{
         functionDeclarations: [
           {
             name: "getRecentActivities",
@@ -94,7 +94,7 @@ app.all("/chat", async (req, res) => {
         ]
       }];
 
-      // GEBRUIKT NU DE STABIELE v1 PRODUCTIE URL VAN GOOGLE
+      // Eerste call naar Gemini (v1) met de gecorrigeerde JSON-payload
       let geminiCall = await axios.post(
         `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
         {
@@ -105,13 +105,19 @@ app.all("/chat", async (req, res) => {
             },
             ...session.chatHistory
           ],
-          tools: tools
+          tools: toolsConfig // Staat nu op de juiste hoofdhoogte voor de v1 API
         }
       );
 
       let candidate = geminiCall.data.candidates[0];
-      let functionCall = candidate.content.parts.find(p => p.functionCall);
+      
+      // Veilig controleren of Gemini een functionCall terugstuurt
+      let functionCall = null;
+      if (candidate.content && candidate.content.parts) {
+        functionCall = candidate.content.parts.find(p => p.functionCall);
+      }
 
+      // Als Gemini de tool wil gebruiken, gaan we data ophalen
       if (functionCall && functionCall.name === "getRecentActivities") {
         const limit = functionCall.args.limit || 5;
         
@@ -122,7 +128,7 @@ app.all("/chat", async (req, res) => {
 
         const formattedData = formatActivitiesForAI(stravaRes.data);
 
-        // GEBRUIKT NU DE STABIELE v1 PRODUCTIE URL VAN GOOGLE
+        // Tweede call naar Gemini om de data te overhandigen
         let geminiFinalCall = await axios.post(
           `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
           {
@@ -142,12 +148,14 @@ app.all("/chat", async (req, res) => {
                   }
                 }]
               }
-            ]
+            ],
+            tools: toolsConfig // Ook hier verplicht meegeven
           }
         );
 
         aiResponseText = geminiFinalCall.data.candidates[0].content.parts[0].text;
       } else {
+        // Als Gemini direct antwoord geeft zonder data nodig te hebben
         aiResponseText = candidate.content.parts[0].text;
       }
 
@@ -155,12 +163,12 @@ app.all("/chat", async (req, res) => {
 
     } catch (err) {
       console.error("Gemini Error:", err.response ? JSON.stringify(err.response.data) : err.message);
-      aiResponseText = "De AI-coach kon de data momenteel niet verwerken. Controleer of de API-sleutel geldig is.";
+      aiResponseText = "De AI-coach kon de data momenteel niet verwerken. Er ging iets mis met het koppelen van de Strava-tools.";
     }
   }
 
   let chatBubbles = session.chatHistory.map(msg => {
-    if (!msg.parts || !msg.parts[0] || !msg.parts[0].text) return ""; // Sla function calls over in de UI
+    if (!msg.parts || !msg.parts[0] || !msg.parts[0].text) return ""; 
     let roleName = msg.role === "user" ? "Jij" : "AI Coach";
     let bgColor = msg.role === "user" ? "#e1ffc7" : "#f1f0f0";
     let align = msg.role === "user" ? "flex-end" : "flex-start";
