@@ -1,9 +1,8 @@
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
-const { GoogleGenAI } = require("@google/genai");
-
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); 
@@ -15,14 +14,10 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI || "http://localhost:3000/callback";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-// Initialiseer de officiële Google Gen AI SDK
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-
 const sessionStore = {};
 
 function formatActivitiesForAI(activities) {
   return activities.map(act => ({
-    id: act.id,
     name: act.name,
     type: act.type,
     distance_km: (act.distance / 1000).toFixed(2),
@@ -78,88 +73,49 @@ app.all("/chat", async (req, res) => {
 
   let aiResponseText = "Stel je vraag aan de AI Coach over je trainingen, intensiteit, zones of herstel!";
 
-  if (userMessage) {
-    // Voeg het bericht van de gebruiker toe aan de lokale geschiedenis voor de UI
+  if (userMessage && GEMINI_API_KEY) {
+    // Sla het bericht van de gebruiker op voor de UI
     session.chatHistory.push({ role: "user", text: userMessage });
 
     try {
-      // Definieer de Strava-tool volgens de SDK-standaard
-      const stravaTool = {
-        functionDeclarations: [{
-          name: "getRecentActivities",
-          description: "Haalt een lijst op van de meest recente sportactiviteiten van de atleet inclusief afstanden, tijden en hartslagdata.",
-          parameters: {
-            type: "OBJECT",
-            properties: {
-              limit: { 
-                type: "INTEGER", 
-                description: "Het aantal activiteiten dat opgehaald moet worden (bijv. 5)." 
-              }
-            }
-          }
-        }]
-      };
-
-      // Roep Gemini aan via de officiële SDK
-      const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: [
-          "Je bent een deskundige AI-sportcoach, gespecialiseerd in inspanningsfysiologie, trainingszones (duur vs intensief) en herstel. Je helpt een ambitieuze duursportatleet/triatleet. Je hebt via tools toegang tot de echte Strava-data van de atleet. Geef serieuze, diepgaande en wetenschappelijk onderbouwde antwoorden. Gebruik NOOIT grapjes of excuses.",
-          userMessage
-        ],
-        config: {
-          tools: [stravaTool]
-        }
+      // Haal ALTIJD direct de laatste 5 activiteiten op bij Strava
+      const stravaRes = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
+        headers: { Authorization: `Bearer ${session.accessToken}` },
+        params: { per_page: 5 }
       });
 
-      // Controleer of Gemini de tool wil aanroepen
-      const functionCalls = response.functionCalls;
-      if (functionCalls && functionCalls.length > 0) {
-        const call = functionCalls[0];
-        
-        if (call.name === "getRecentActivities") {
-          const limit = call.args.limit || 5;
-          
-          // Haal de echte data op bij Strava
-          const stravaRes = await axios.get("https://www.strava.com/api/v3/athlete/activities", {
-            headers: { Authorization: `Bearer ${session.accessToken}` },
-            params: { per_page: limit }
-          });
+      const formattedData = formatActivitiesForAI(stravaRes.data);
 
-          const formattedData = formatActivitiesForAI(stravaRes.data);
-
-          // Stuur de verzamelde data via de SDK terug naar Gemini voor de definitieve analyse
-          const finalResponse = await ai.models.generateContent({
-            model: "gemini-1.5-flash",
-            contents: [
-              "Je bent een deskundige AI-sportcoach, gespecialiseerd in inspanningsfysiologie, trainingszones (duur vs intensief) en herstel. Je helpt een ambitieuze duursportatleet/triatleet. Je hebt via tools toegang tot de echte Strava-data van de atleet. Geef serieuze, diepgaande en wetenschappelijk onderbouwde antwoorden. Gebruik NOOIT grapjes of excuses.",
-              userMessage,
-              response.candidates[0].content, // De oorspronkelijke function call context
-              {
-                role: "user",
-                parts: [{
-                  functionResponse: {
-                    name: "getRecentActivities",
-                    response: { data: formattedData }
-                  }
-                }]
-              }
-            ]
-          });
-
-          aiResponseText = finalResponse.text;
+      // Bouw de chatgeschiedenis op in het simpele tekstformaat dat Gemini ALTIJD begrijpt
+      const apiContents = [
+        {
+          role: "user",
+          parts: [{ text: "Je bent een deskundige AI-sportcoach, gespecialiseerd in inspanningsfysiologie, trainingszones (duur vs intensief) en herstel. Je helpt een ambitieuze duursportatleet/triatleet. Hieronder vind je de meest recente Strava-activiteiten van de atleet die je kunt gebruiken bij je analyses: " + JSON.stringify(formattedData) + " Geef serieuze, diepgaande en wetenschappelijk onderbouwde antwoorden op basis van deze data. Gebruik NOOIT grapjes of excuses." }]
         }
-      } else {
-        // Als Gemini direct antwoord geeft zonder data nodig te hebben
-        aiResponseText = response.text;
-      }
+      ];
 
-      // Sla het antwoord van de coach op in de geschiedenis voor de UI
+      // Voeg de eerdere chatberichten netjes toe
+      session.chatHistory.forEach(msg => {
+        apiContents.push({
+          role: msg.role === "user" ? "user" : "model",
+          parts: [{ text: msg.text }]
+        });
+      });
+
+      // Simpele, kale API call naar Gemini zonder 'tools' veld
+      let geminiCall = await axios.post(
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        { contents: apiContents }
+      );
+
+      aiResponseText = geminiCall.data.candidates[0].content.parts[0].text;
+      
+      // Sla het antwoord op voor de UI
       session.chatHistory.push({ role: "model", text: aiResponseText });
 
     } catch (err) {
-      console.error("Gemini SDK Error:", err);
-      aiResponseText = "De AI-coach kon de data momenteel niet verwerken via de beveiligde SDK-verbinding.";
+      console.error("Error:", err.response ? JSON.stringify(err.response.data) : err.message);
+      aiResponseText = "De AI-coach kon je bericht of de Strava-data momenteel niet verwerken.";
     }
   }
 
@@ -188,7 +144,7 @@ app.all("/chat", async (req, res) => {
     <div class="chat-container">
       <div class="header">🤖 Gemini High-Performance Sport Coach</div>
       <div class="messages-box">
-        ${chatBubbles || `<div style="color: #888; text-align: center; margin-top: 50px; font-size: 1.05em; line-height: 1.5;">Stel een vraag om de coach toegang te geven tot je Strava-data.<br><br><span style="font-size: 0.9em; background: #eee; padding: 8px 12px; border-radius: 20px; color: #555;">Probeer: "Analyseer de intensiteit van mijn laatste 3 trainingen"</span></div>`}
+        ${chatBubbles || `<div style="color: #888; text-align: center; margin-top: 50px; font-size: 1.05em; line-height: 1.5;">Stel een vraag om de coach toegang te geven tot je Strava-data.<br><br><span style="font-size: 0.9em; background: #eee; padding: 8px 12px; border-radius: 20px; color: #555;">Probeer: "Analyseer de intensiteit van mijn laatste 5 trainingen"</span></div>`}
       </div>
       <form action="/chat" method="POST" class="form-box">
         <input type="hidden" name="sessionId" value="${sessionId}">
@@ -204,5 +160,5 @@ app.all("/chat", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log("AI-Assistent server draait via de officiële SDK op poort " + PORT);
+  console.log("AI-Sportcoach server draait stabiel op poort " + PORT);
 });
